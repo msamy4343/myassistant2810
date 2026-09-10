@@ -1,17 +1,14 @@
-# ====== 🤖 مساعدي الشخصي — النسخة السحابية ======
+# ====== 🤖 مساعدي الشخصي — نسخة الموبايل ======
 import telebot
-from google import genai
-from flask import Flask
-import threading
+import requests
 import json
 import os
 
-# ⚙️ المفاتيح بتتقرا من متغيرات البيئة (آمنة)
+# ⚙️ المفاتيح
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
-ai = genai.Client(api_key=GEMINI_API_KEY)
 
 # 🧠 شخصية المساعد
 PERSONALITY = """أنت "مساعدي" — مساعد شخصي عربي ذكي.
@@ -38,6 +35,24 @@ def save_memory():
 
 memory = load_memory()
 
+# 🧠 الكلام مع جيميناي (النسخة الخفيفة)
+def ask_gemini(history, user_message):
+    contents = []
+    for msg in history:
+        contents.append({"role": msg["role"], "parts": [{"text": msg["content"]}]})
+    contents.append({"role": "user", "parts": [{"text": user_message}]})
+
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY
+
+    body = {
+        "system_instruction": {"parts": [{"text": PERSONALITY}]},
+        "contents": contents
+    }
+
+    r = requests.post(url, json=body)
+    result = r.json()
+    return result["candidates"][0]["content"]["parts"][0]["text"]
+
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message,
@@ -61,20 +76,10 @@ def chat(message):
 
     history = memory[user_id][-30:]
 
-    contents = []
-    for msg in history:
-        contents.append({"role": msg["role"], "parts": [{"text": msg["content"]}]})
-    contents.append({"role": "user", "parts": [{"text": message.text}]})
-
     try:
         bot.send_chat_action(message.chat.id, 'typing')
 
-        response = ai.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=contents,
-            config={"system_instruction": PERSONALITY}
-        )
-        reply = response.text
+        reply = ask_gemini(history, message.text)
 
         memory[user_id].append({"role": "user", "content": message.text})
         memory[user_id].append({"role": "model", "content": reply})
@@ -86,19 +91,5 @@ def chat(message):
         print("خطأ:", e)
         bot.reply_to(message, "⚠️ حصل خطأ، جرب تبعت رسالتك تاني")
 
-# 🌐 سيرفر صغير عشان السيرفر السحابي يفضل شغال
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "🤖 المساعد شغال!"
-
-def run_flask():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
-def run_bot():
-    bot.infinity_polling()
-
 print("🤖 المساعد شغال! روح تيليجرام واكتب للبوت")
-threading.Thread(target=run_flask, daemon=True).start()
-run_bot()
+bot.infinity_polling()
