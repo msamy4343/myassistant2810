@@ -1,4 +1,4 @@
-# ====== 🤖 مساعدي الشخصي — نسخة التذكيرات ⏰ ======
+# ====== 🤖 مساعدي الشخصي — نسخة التذكيرات ⏰ (مصححة) ======
 import telebot
 import requests
 import json
@@ -93,12 +93,12 @@ def parse_reminder(text):
         return "", -1
 
 def fire_reminder(r):
-    global reminders
     try:
         bot.send_message(r["chat_id"], f"⏰ تذكير: {r['text']}")
     except Exception as e:
         print("خطأ في إرسال التذكير:", e)
-    reminders = [x for x in reminders if x["id"] != r["id"]]
+    # نشيل التذكير المنفَّذ من القائمة
+    reminders[:] = [x for x in reminders if x["id"] != r["id"]]
     save_reminders()
 
 def schedule_reminder(chat_id, minutes, text):
@@ -127,15 +127,14 @@ def restore_reminders():
             fire_time = datetime.fromisoformat(r["fire_at"])
             diff = (fire_time - now).total_seconds()
             if diff < 0:
-                diff = 3  # فات وقته؟ نبعته فوراً
+                diff = 3
             timer = threading.Timer(diff, fire_reminder, args=[r])
             timer.daemon = True
             timer.start()
             pending.append(r)
         except Exception as e:
             print("تذكير بايظ:", e)
-    global reminders
-    reminders = pending
+    reminders[:] = pending
     save_reminders()
     if pending:
         print(f"⏰ رجّعت {len(pending)} تذكير محفوظ")
@@ -177,11 +176,10 @@ def text_to_speech_file(text):
     return audio
 
 def process_message(user_id, user_text):
-    # ⏰ عرض التذكيرات
+    # ⏰ إدارة التذكيرات
     if "تذكيراتي" in user_text or "التذكيرات" in user_text:
         if "امسح" in user_text or "الغ" in user_text:
-            global reminders
-            reminders = []
+            reminders.clear()
             save_reminders()
             return "🗑️ مسحت كل التذكيرات."
         if not reminders:
