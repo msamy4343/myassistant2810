@@ -1,4 +1,4 @@
-# ====== 🤖 مساعدي الشخصي — نسخة الملفات 📁 ======
+# ====== 🤖 مساعدي الشخصي — نسخة البحث 🔍 ======
 import telebot
 import requests
 import json
@@ -12,6 +12,7 @@ import edge_tts
 import pypdf
 from docx import Document as DocxDocument
 import openpyxl
+from bs4 import BeautifulSoup
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
@@ -29,7 +30,8 @@ PERSONALITY = """أنت "مساعدي" — مساعد شخصي عربي ذكي.
 - لما تشرح حاجة: اشرح بالتفصيل مع أمثلة عملية
 - لما يطلب تنفيذ حاجة: نفذها كاملة وجاهزة
 - افتكر تفاصيل حياته واستخدمها لما تنفع
-- عند الإجابة عن الملفات: استخدم معرفتك المخزنة عنها
+- عند الإجابة عن الملفات: استخدم معرفتك المخزنة
+- لو السؤال عن معلومات حديثة (أسعار/أخبار/طقس): قول له يدور في النت بكلمة "دور" أو "ابحث"
 """
 
 MEMORY_FILE = "memory.json"
@@ -154,7 +156,6 @@ def save_knowledge():
 knowledge = load_knowledge()
 
 def extract_text_from_file(file_bytes, file_name):
-    """استخراج النص من PDF / Word / Excel"""
     name = file_name.lower()
     try:
         if name.endswith('.pdf'):
@@ -186,6 +187,62 @@ def summarize_text(text):
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
     result = gemini_request(body)
     return result["candidates"][0]["content"]["parts"][0]["text"]
+
+# 🔍 ====== البحث في الإنترنت ======
+SEARCH_KEYWORDS = [
+    "دور على", "دور لي", "دورلي", "ابحث عن", "ابحث لي", "ابحثلي",
+    "بحث عن", "آخر أخبار", "اخبار", "أخبار", "سعر", "أسعار", "اسعار",
+    "طقس", "الطقس", "الجو بكرة", "الجو النهاردة", "النتائج", "نتيجة"
+]
+
+def needs_search(text):
+    return any(k in text for k in SEARCH_KEYWORDS)
+
+def web_search(query, max_results=6):
+    """بحث حقيقي في DuckDuckGo"""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        }
+        r = requests.post("https://html.duckduckgo.com/html/",
+                          data={"q": query}, headers=headers, timeout=20)
+        soup = BeautifulSoup(r.text, "html.parser")
+        results = []
+        for res in soup.select("div.result")[:max_results]:
+            title_el = res.select_one("a.result__a")
+            snippet_el = res.select_one(".result__snippet")
+            if title_el:
+                results.append({
+                    "title": title_el.get_text(strip=True),
+                    "url": title_el.get("href", ""),
+                    "snippet": snippet_el.get_text(strip=True) if snippet_el else ""
+                })
+        return results
+    except Exception as e:
+        print("🔴 خطأ في البحث:", e)
+        return []
+
+def search_and_answer(user_text):
+    """يدور + يجيب + يلخص بالمصادر"""
+    results = web_search(user_text)
+    if not results:
+        return "😔 معرفش ألاقي نتايج دلوقتي — جرب تاني بعد شوية أو صيغ سؤالك بشكل تاني."
+
+    context = "\n\n".join([
+        f"عنوان: {r['title']}\nملخص: {r['snippet']}\nالرابط: {r['url']}"
+        for r in results
+    ])
+
+    prompt = f"""المستخدم سأل: "{user_text}"
+
+دورت في الإنترنت ولقيت النتايج دي:
+
+{context}
+
+لخص الإجابة بالعربي بطريقة واضحة ومنظمة ومفيدة للمستخدم.
+اذكر المصادر في الآخر (عنوان + رابط)."""
+
+    return ask_gemini([], prompt)
 
 # 🧠 ====== المحادثة ======
 def ask_gemini(history, user_message):
@@ -224,7 +281,7 @@ def text_to_speech_file(text):
     return audio
 
 def process_message(user_id, user_text):
-    # 📋 عرض الملفات المخزنة
+    # 📋 الملفات
     if "ملفاتي" in user_text:
         if "امسح" in user_text or "الغ" in user_text:
             knowledge.clear()
@@ -235,7 +292,7 @@ def process_message(user_id, user_text):
         lines = [f"• {name} — {info['summary'][:80]}..." for name, info in knowledge.items()]
         return "📁 ملفاتك المخزنة:\n" + "\n".join(lines)
 
-    # ⏰ إدارة التذكيرات
+    # ⏰ التذكيرات
     if "تذكيراتي" in user_text or "التذكيرات" in user_text:
         if "امسح" in user_text or "الغ" in user_text:
             reminders.clear()
@@ -246,7 +303,6 @@ def process_message(user_id, user_text):
         lines = [f"• {r['text']} — الساعة {datetime.fromisoformat(r['fire_at']).strftime('%H:%M')}" for r in reminders]
         return "⏰ تذكيراتك المجدولة:\n" + "\n".join(lines)
 
-    # ⏰ طلب تذكير جديد
     if is_reminder_request(user_text):
         text, minutes = parse_reminder(user_text)
         if minutes < 0:
@@ -254,7 +310,11 @@ def process_message(user_id, user_text):
         fire_at = schedule_reminder(user_id, minutes, text)
         return f"⏰ تمام! هفكرك بـ «{text}» الساعة {fire_at.strftime('%H:%M')}"
 
-    # 💬 محادثة — مع إضافة معرفة الملفات لو اتذكرت
+    # 🔍 البحث في الإنترنت
+    if needs_search(user_text):
+        return search_and_answer(user_text)
+
+    # 💬 محادثة عادية (+ سياق الملفات)
     if user_id not in memory:
         memory[user_id] = []
     history = memory[user_id][-30:]
@@ -280,7 +340,8 @@ def start(message):
         "📝 اكتبلي أي حاجة\n"
         "🎤 ابعتلي فويس\n"
         "⏰ قوللي: فكرني الساعة كذا\n"
-        "📁 ابعتلي PDF / Word / Excel / صورة — هقراها وأخزنها\n\n"
+        "📁 ابعتلي ملف أو صورة\n"
+        "🔍 قوللي: دور على... أو اسألني عن أخبار وأسعار\n\n"
         "/مسح — مسح الذاكرة")
 
 @bot.message_handler(commands=['مسح'])
@@ -289,7 +350,6 @@ def reset(message):
     save_memory()
     bot.reply_to(message, "✅ مسحت الذاكرة — بداية جديدة!")
 
-# 📄 handler الملفات (PDF / Word / Excel)
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     try:
@@ -304,31 +364,28 @@ def handle_document(message):
         if text is None:
             bot.reply_to(message,
                 "⚠️ الصيغة دي مش مدعومة لسه.\n"
-                "المدعوم حالياً: PDF، Word (docx)، Excel (xlsx) — والصور 📁")
+                "المدعوم: PDF، Word (docx)، Excel (xlsx) — والصور 📁")
             return
 
         if not text.strip():
             bot.reply_to(message,
-                "🤔 الملف وصل لكن النص طلع فاضي —\n"
-                "غالباً ده PDF ماسوح (Scanner). جرّب تصور صفحاته كصور وابعتها لي 📸")
+                "🤔 الملف وصل لكن النص طلع فاضي — غالباً PDF ماسوح.\n"
+                "جرّب تصور صفحاته كصور وابعتها لي 📸")
             return
 
         caption = message.caption or ""
+        summary = summarize_text(text)
 
         if caption:
-            # فيه سؤال مع الملف
             question_with_text = f"بناء على ملف «{file_name}»، أجب على: {caption}\n\nنص الملف:\n{text[:20000]}"
             reply = ask_gemini([], question_with_text)
         else:
-            # ملخص تلقائي
-            summary = summarize_text(text)
             reply = (f"✅ قريت «{file_name}» ({count} جزء) وخزنته في معرفتي.\n\n"
                      f"📋 الملخص:\n{summary}\n\n"
                      f"💡 اسألني أي وقت: «إيه أهم النقط في {file_name}؟»")
 
-        # 💾 تخزين المعرفة
         knowledge[file_name] = {
-            "summary": summarize_text(text) if caption else summary,
+            "summary": summary,
             "text": text[:25000],
             "count": count
         }
@@ -340,12 +397,11 @@ def handle_document(message):
         print("🔴 خطأ في الملف:", e)
         bot.reply_to(message, "⚠️ حصل خطأ في قراءة الملف")
 
-# 🖼️ handler الصور
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     try:
         bot.send_chat_action(message.chat.id, 'typing')
-        file_id = message.photo[-1].file_id  # أعلى دقة
+        file_id = message.photo[-1].file_id
         file_info = bot.get_file(file_id)
         img_bytes = bot.download_file(file_info.file_path)
 
@@ -401,5 +457,5 @@ def handle_voice(message):
 
 # 🚀 الإقلاع
 restore_reminders()
-print("🤖 المساعد شغال (نص + صوت + تذكيرات + ملفات 📁)!")
+print("🤖 المساعد شغال (نص + صوت + تذكيرات + ملفات + بحث 🔍)!")
 bot.infinity_polling()
