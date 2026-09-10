@@ -1,4 +1,3 @@
-# ====== 🤖 مساعدي الشخصي — نسخة الموبايل ======
 import telebot
 import requests
 import json
@@ -38,7 +37,7 @@ def ask_gemini(history, user_message):
         contents.append({"role": msg["role"], "parts": [{"text": msg["content"]}]})
     contents.append({"role": "user", "parts": [{"text": user_message}]})
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + GEMINI_API_KEY
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=" + GEMINI_API_KEY
 
     body = {
         "system_instruction": {"parts": [{"text": PERSONALITY}]},
@@ -48,7 +47,6 @@ def ask_gemini(history, user_message):
     r = requests.post(url, json=body)
     result = r.json()
 
-    # 🔍 لو جيميناي رجع خطأ — نطبع السبب بالظبط
     if "error" in result:
         error_msg = result["error"].get("message", "خطأ غير معروف")
         print("🔴 خطأ من جيميناي:", error_msg)
@@ -92,5 +90,5 @@ def chat(message):
         print("خطأ:", e)
         bot.reply_to(message, "⚠️ حصل خطأ، جرب تبعت رسالتك تاني")
 
-print("🤖 المساعد شغال! روح تيليجرام واكتب للبوت")
+print("🤖 Hi mostafa")
 bot.infinity_polling()
