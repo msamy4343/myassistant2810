@@ -1,4 +1,4 @@
-# ====== 🤖 مساعدي الشخصي — نسخة الصوت 🎤 ======
+# ====== 🤖 مساعدي الشخصي — نسخة التذكيرات ⏰ ======
 import telebot
 import requests
 import json
@@ -6,6 +6,8 @@ import os
 import io
 import base64
 import asyncio
+import threading
+from datetime import datetime, timedelta
 import edge_tts
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -15,20 +17,20 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=" + GEMINI_API_KEY
 
-# 🗣️ صوت الرد (رجالي مصري)
 TTS_VOICE = "ar-EG-ShakirNeural"
 
 PERSONALITY = """أنت "مساعدي" — مساعد شخصي عربي ذكي.
-صاحبك اسمه مصطفى،
+صاحبك اسمه مصطفى، مشغول بـ: شغل + دراسة + مشروع.
 قواعدك:
 - ردودك ودودة ومباشرة بدون مقدمات طويلة
 - لما تشرح حاجة: اشرح بالتفصيل مع أمثلة عملية
 - لما يطلب تنفيذ حاجة: نفذها كاملة وجاهزة
 - افتكر تفاصيل حياته واستخدمها لما تنفع
-- الردود في المكالمات الصوتية تكون مختصرة وطبيعية زي الكلام
+- في الصوت: ردود مختصرة طبيعية
 """
 
 MEMORY_FILE = "memory.json"
+REMINDERS_FILE = "reminders.json"
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
@@ -42,6 +44,24 @@ def save_memory():
 
 memory = load_memory()
 
+# ⏰ ====== نظام التذكيرات ======
+def load_reminders():
+    if os.path.exists(REMINDERS_FILE):
+        with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+def save_reminders():
+    with open(REMINDERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(reminders, f, ensure_ascii=False, indent=2)
+
+reminders = load_reminders()
+
+REMINDER_KEYWORDS = ["فكرني", "فكرنى", "ذكرني", "ذكرنى", "ذكّرني", "ذكّرنى"]
+
+def is_reminder_request(text):
+    return any(k in text for k in REMINDER_KEYWORDS)
+
 def gemini_request(body):
     r = requests.post(GEMINI_URL, json=body)
     result = r.json()
@@ -51,6 +71,76 @@ def gemini_request(body):
         raise Exception(error_msg)
     return result
 
+def parse_reminder(text):
+    """جيميناي يفهم الطلب ويرجع (نص التذكير، الدقايق)"""
+    now = datetime.now()
+    prompt = f"""المستخدم طلب تذكير. الوقت الحالي: {now.strftime('%Y-%m-%d %H:%M')}
+رسالة المستخدم: "{text}"
+
+رد بـ JSON فقط بدون أي شرح:
+{{"text": "نص التذكير المختصر بدون كلمة فكرني", "minutes": <عدد الدقايق من دلوقتي>}}
+
+لو الوقت مش واضح خالص: {{"text": "", "minutes": -1}}"""
+
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    result = gemini_request(body)
+    raw = result["candidates"][0]["content"]["parts"][0]["text"].strip()
+    raw = raw.replace("```json", "").replace("```", "").strip()
+    try:
+        data = json.loads(raw)
+        return data.get("text", ""), int(data.get("minutes", -1))
+    except:
+        return "", -1
+
+def fire_reminder(r):
+    global reminders
+    try:
+        bot.send_message(r["chat_id"], f"⏰ تذكير: {r['text']}")
+    except Exception as e:
+        print("خطأ في إرسال التذكير:", e)
+    reminders = [x for x in reminders if x["id"] != r["id"]]
+    save_reminders()
+
+def schedule_reminder(chat_id, minutes, text):
+    reminder_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    fire_at = datetime.now() + timedelta(minutes=minutes)
+    reminders.append({
+        "id": reminder_id,
+        "chat_id": chat_id,
+        "text": text,
+        "fire_at": fire_at.isoformat()
+    })
+    save_reminders()
+
+    timer = threading.Timer(minutes * 60, fire_reminder,
+                             args=[{"id": reminder_id, "chat_id": chat_id, "text": text}])
+    timer.daemon = True
+    timer.start()
+    return fire_at
+
+def restore_reminders():
+    """إرجاع التذكيرات المحفوظة عند تشغيل البوت"""
+    now = datetime.now()
+    pending = []
+    for r in reminders:
+        try:
+            fire_time = datetime.fromisoformat(r["fire_at"])
+            diff = (fire_time - now).total_seconds()
+            if diff < 0:
+                diff = 3  # فات وقته؟ نبعته فوراً
+            timer = threading.Timer(diff, fire_reminder, args=[r])
+            timer.daemon = True
+            timer.start()
+            pending.append(r)
+        except Exception as e:
+            print("تذكير بايظ:", e)
+    global reminders
+    reminders = pending
+    save_reminders()
+    if pending:
+        print(f"⏰ رجّعت {len(pending)} تذكير محفوظ")
+
+# 🧠 ====== المحادثة ======
 def ask_gemini(history, user_message):
     contents = []
     for msg in history:
@@ -61,17 +151,15 @@ def ask_gemini(history, user_message):
         "system_instruction": {"parts": [{"text": PERSONALITY}]},
         "contents": contents
     }
-
     result = gemini_request(body)
     return result["candidates"][0]["content"]["parts"][0]["text"]
 
-# 🎤 صوت → نص (عن طريق جيميناي)
 def voice_to_text(ogg_bytes):
     audio_b64 = base64.b64encode(ogg_bytes).decode()
     body = {
         "contents": [{
             "parts": [
-                {"text": "حوّل الرسالة الصوتية دي لنص مكتوب. اكتب النص فقط من غير أي تعليق إضافي."},
+                {"text": "حوّل الرسالة الصوتية دي لنص مكتوب. اكتب النص فقط."},
                 {"inline_data": {"mime_type": "audio/ogg", "data": audio_b64}}
             ]
         }]
@@ -79,7 +167,6 @@ def voice_to_text(ogg_bytes):
     result = gemini_request(body)
     return result["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-# 🔊 نص → صوت (صوت مصري طبيعي)
 def text_to_speech_file(text):
     async def _make():
         communicate = edge_tts.Communicate(text, TTS_VOICE)
@@ -89,8 +176,28 @@ def text_to_speech_file(text):
     audio.name = "reply.mp3"
     return audio
 
-# 💾 المسار المشترك للمحادثة (نص أو صوت)
 def process_message(user_id, user_text):
+    # ⏰ عرض التذكيرات
+    if "تذكيراتي" in user_text or "التذكيرات" in user_text:
+        if "امسح" in user_text or "الغ" in user_text:
+            global reminders
+            reminders = []
+            save_reminders()
+            return "🗑️ مسحت كل التذكيرات."
+        if not reminders:
+            return "مفيش أي تذكيرات مجدولة دلوقتي 🙂"
+        lines = [f"• {r['text']} — الساعة {datetime.fromisoformat(r['fire_at']).strftime('%H:%M')}" for r in reminders]
+        return "⏰ تذكيراتك المجدولة:\n" + "\n".join(lines)
+
+    # ⏰ طلب تذكير جديد
+    if is_reminder_request(user_text):
+        text, minutes = parse_reminder(user_text)
+        if minutes < 0:
+            return "الوقت مش واضح 😅 قولي بالظبط إمتى — مثلاً: فكرني الساعة 8 مساءً"
+        fire_at = schedule_reminder(user_id, minutes, text)
+        return f"⏰ تمام! هفكرك بـ «{text}» الساعة {fire_at.strftime('%H:%M')}"
+
+    # 💬 محادثة عادية
     if user_id not in memory:
         memory[user_id] = []
     history = memory[user_id][-30:]
@@ -105,9 +212,11 @@ def process_message(user_id, user_text):
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message,
-        "أهلاً يا مصطفى! 👋 أنا مساعدك الشخصي.\n\n"
-        "ابعتلي رسالة نص 📝 أو فويس 🎤 — وأنا هفهمك وأرد عليك.\n\n"
-        "/مسح — مسح الذاكرة والبدء من جديد")
+        "أهلاً يا مصطفى! 👋\n\n"
+        "📝 اكتبلي أي حاجة\n"
+        "🎤 ابعتلي فويس\n"
+        "⏰ قوللي: فكرني الساعة كذا...\n\n"
+        "/مسح — مسح الذاكرة")
 
 @bot.message_handler(commands=['مسح'])
 def reset(message):
@@ -115,7 +224,6 @@ def reset(message):
     save_memory()
     bot.reply_to(message, "✅ مسحت الذاكرة — بداية جديدة!")
 
-# 📝 المسار النصي
 @bot.message_handler(func=lambda m: m.content_type == 'text')
 def chat(message):
     user_id = str(message.chat.id)
@@ -127,33 +235,27 @@ def chat(message):
         print("خطأ:", e)
         bot.reply_to(message, "⚠️ حصل خطأ، جرب تاني")
 
-# 🎤 المسار الصوتي
 @bot.message_handler(content_types=['voice'])
 def handle_voice(message):
     user_id = str(message.chat.id)
     try:
         bot.send_chat_action(message.chat.id, 'typing')
-
-        # 1. ننزل الفويس
         file_info = bot.get_file(message.voice.file_id)
         ogg_bytes = bot.download_file(file_info.file_path)
-        print("📥 فويس وصلت...")
 
-        # 2. صوت → نص
         user_text = voice_to_text(ogg_bytes)
-        print("📝 اللي قلته:", user_text)
+        print("🎤 قلت:", user_text)
 
-        # 3. المحادثة + الذاكرة
         reply = process_message(user_id, user_text)
 
-        # 4. نص → صوت → إرسال
         bot.send_chat_action(message.chat.id, 'record_voice')
         audio = text_to_speech_file(reply)
         bot.send_audio(message.chat.id, audio)
-
     except Exception as e:
         print("خطأ في الصوت:", e)
-        bot.reply_to(message, "⚠️ حصل خطأ في الصوت، ابعتها تاني")
+        bot.reply_to(message, "⚠️ حصل خطأ، ابعتها تاني")
 
-print("🤖 المساعد شغال (نص + صوت 🎤)!")
+# 🚀 الإقلاع
+restore_reminders()
+print("🤖 المساعد شغال (نص + صوت + تذكيرات ⏰)!")
 bot.infinity_polling()
