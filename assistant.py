@@ -4,13 +4,11 @@ import requests
 import json
 import os
 
-# ⚙️ المفاتيح
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
-# 🧠 شخصية المساعد
 PERSONALITY = """أنت "مساعدي" — مساعد شخصي عربي ذكي.
 صاحبك اسمه مصطفى، مشغول بـ: شغل + دراسة + مشروع.
 قواعدك:
@@ -20,7 +18,6 @@ PERSONALITY = """أنت "مساعدي" — مساعد شخصي عربي ذكي.
 - افتكر تفاصيل حياته واستخدمها لما تنفع
 """
 
-# 💾 الذاكرة
 MEMORY_FILE = "memory.json"
 
 def load_memory():
@@ -35,7 +32,6 @@ def save_memory():
 
 memory = load_memory()
 
-# 🧠 الكلام مع جيميناي (النسخة الخفيفة)
 def ask_gemini(history, user_message):
     contents = []
     for msg in history:
@@ -51,14 +47,20 @@ def ask_gemini(history, user_message):
 
     r = requests.post(url, json=body)
     result = r.json()
+
+    # 🔍 لو جيميناي رجع خطأ — نطبع السبب بالظبط
+    if "error" in result:
+        error_msg = result["error"].get("message", "خطأ غير معروف")
+        print("🔴 خطأ من جيميناي:", error_msg)
+        raise Exception(error_msg)
+
     return result["candidates"][0]["content"]["parts"][0]["text"]
 
 @bot.message_handler(commands=['start'])
 def start(message):
     bot.reply_to(message,
         "أهلاً يا مصطفى! 👋 أنا مساعدك الشخصي.\n\n"
-        "اكتبلي أي حاجة — سؤال، طلب، أو كلام عادي.\n"
-        "أنا هفتكر محادثاتنا عشان أعرفك أكتر.\n\n"
+        "اكتبلي أي حاجة — سؤال، طلب، أو كلام عادي.\n\n"
         "/مسح — مسح الذاكرة والبدء من جديد")
 
 @bot.message_handler(commands=['مسح'])
@@ -78,7 +80,6 @@ def chat(message):
 
     try:
         bot.send_chat_action(message.chat.id, 'typing')
-
         reply = ask_gemini(history, message.text)
 
         memory[user_id].append({"role": "user", "content": message.text})
