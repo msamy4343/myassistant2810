@@ -1,4 +1,4 @@
-# ====== 🤖 مساعدي الشخصي — نسخة التذكيرات ⏰ (مصححة) ======
+# ====== 🤖 مساعدي الشخصي — نسخة الملفات 📁 ======
 import telebot
 import requests
 import json
@@ -9,6 +9,9 @@ import asyncio
 import threading
 from datetime import datetime, timedelta
 import edge_tts
+import pypdf
+from docx import Document as DocxDocument
+import openpyxl
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
@@ -26,11 +29,12 @@ PERSONALITY = """أنت "مساعدي" — مساعد شخصي عربي ذكي.
 - لما تشرح حاجة: اشرح بالتفصيل مع أمثلة عملية
 - لما يطلب تنفيذ حاجة: نفذها كاملة وجاهزة
 - افتكر تفاصيل حياته واستخدمها لما تنفع
-- في الصوت: ردود مختصرة طبيعية
+- عند الإجابة عن الملفات: استخدم معرفتك المخزنة عنها
 """
 
 MEMORY_FILE = "memory.json"
 REMINDERS_FILE = "reminders.json"
+FILES_FILE = "files.json"
 
 def load_memory():
     if os.path.exists(MEMORY_FILE):
@@ -44,7 +48,7 @@ def save_memory():
 
 memory = load_memory()
 
-# ⏰ ====== نظام التذكيرات ======
+# ⏰ ====== التذكيرات ======
 def load_reminders():
     if os.path.exists(REMINDERS_FILE):
         with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
@@ -72,7 +76,6 @@ def gemini_request(body):
     return result
 
 def parse_reminder(text):
-    """جيميناي يفهم الطلب ويرجع (نص التذكير، الدقايق)"""
     now = datetime.now()
     prompt = f"""المستخدم طلب تذكير. الوقت الحالي: {now.strftime('%Y-%m-%d %H:%M')}
 رسالة المستخدم: "{text}"
@@ -97,7 +100,6 @@ def fire_reminder(r):
         bot.send_message(r["chat_id"], f"⏰ تذكير: {r['text']}")
     except Exception as e:
         print("خطأ في إرسال التذكير:", e)
-    # نشيل التذكير المنفَّذ من القائمة
     reminders[:] = [x for x in reminders if x["id"] != r["id"]]
     save_reminders()
 
@@ -119,7 +121,6 @@ def schedule_reminder(chat_id, minutes, text):
     return fire_at
 
 def restore_reminders():
-    """إرجاع التذكيرات المحفوظة عند تشغيل البوت"""
     now = datetime.now()
     pending = []
     for r in reminders:
@@ -138,6 +139,53 @@ def restore_reminders():
     save_reminders()
     if pending:
         print(f"⏰ رجّعت {len(pending)} تذكير محفوظ")
+
+# 📁 ====== معرفة الملفات ======
+def load_knowledge():
+    if os.path.exists(FILES_FILE):
+        with open(FILES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_knowledge():
+    with open(FILES_FILE, "w", encoding="utf-8") as f:
+        json.dump(knowledge, f, ensure_ascii=False, indent=2)
+
+knowledge = load_knowledge()
+
+def extract_text_from_file(file_bytes, file_name):
+    """استخراج النص من PDF / Word / Excel"""
+    name = file_name.lower()
+    try:
+        if name.endswith('.pdf'):
+            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            return "\n".join(pages), len(reader.pages)
+        elif name.endswith('.docx'):
+            doc = DocxDocument(io.BytesIO(file_bytes))
+            paras = [p.text for p in doc.paragraphs if p.text.strip()]
+            return "\n".join(paras), len(paras)
+        elif name.endswith('.xlsx'):
+            wb = openpyxl.load_workbook(io.BytesIO(file_bytes))
+            texts = []
+            for sheet in wb.sheetnames:
+                ws = wb[sheet]
+                texts.append(f"=== ورقة: {sheet} ===")
+                for row in ws.iter_rows(values_only=True):
+                    if any(c is not None for c in row):
+                        texts.append(" | ".join(str(c) for c in row if c is not None))
+            return "\n".join(texts), len(wb.sheetnames)
+        else:
+            return None, 0
+    except Exception as e:
+        print("🔴 خطأ في قراءة الملف:", e)
+        return None, 0
+
+def summarize_text(text):
+    prompt = f"لخص النص ده في نقاط مختصرة ومنظمة بالعربي:\n\n{text[:15000]}"
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    result = gemini_request(body)
+    return result["candidates"][0]["content"]["parts"][0]["text"]
 
 # 🧠 ====== المحادثة ======
 def ask_gemini(history, user_message):
@@ -176,6 +224,17 @@ def text_to_speech_file(text):
     return audio
 
 def process_message(user_id, user_text):
+    # 📋 عرض الملفات المخزنة
+    if "ملفاتي" in user_text:
+        if "امسح" in user_text or "الغ" in user_text:
+            knowledge.clear()
+            save_knowledge()
+            return "🗑️ مسحت كل معرفة الملفات."
+        if not knowledge:
+            return "مفيش ملفات مخزنة لسه 📁 ابعتلي أي PDF أو Word أو Excel أو صورة!"
+        lines = [f"• {name} — {info['summary'][:80]}..." for name, info in knowledge.items()]
+        return "📁 ملفاتك المخزنة:\n" + "\n".join(lines)
+
     # ⏰ إدارة التذكيرات
     if "تذكيراتي" in user_text or "التذكيرات" in user_text:
         if "امسح" in user_text or "الغ" in user_text:
@@ -195,12 +254,19 @@ def process_message(user_id, user_text):
         fire_at = schedule_reminder(user_id, minutes, text)
         return f"⏰ تمام! هفكرك بـ «{text}» الساعة {fire_at.strftime('%H:%M')}"
 
-    # 💬 محادثة عادية
+    # 💬 محادثة — مع إضافة معرفة الملفات لو اتذكرت
     if user_id not in memory:
         memory[user_id] = []
     history = memory[user_id][-30:]
 
-    reply = ask_gemini(history, user_text)
+    message_with_context = user_text
+    for name, info in knowledge.items():
+        if name in user_text:
+            context = f"\n\n[معرفتك من ملف «{name}»:\nالملخص: {info['summary']}\nجزء من النص:\n{info.get('text', '')[:8000]}]"
+            message_with_context += context
+            break
+
+    reply = ask_gemini(history, message_with_context)
 
     memory[user_id].append({"role": "user", "content": user_text})
     memory[user_id].append({"role": "model", "content": reply})
@@ -213,7 +279,8 @@ def start(message):
         "أهلاً يا مصطفى! 👋\n\n"
         "📝 اكتبلي أي حاجة\n"
         "🎤 ابعتلي فويس\n"
-        "⏰ قوللي: فكرني الساعة كذا...\n\n"
+        "⏰ قوللي: فكرني الساعة كذا\n"
+        "📁 ابعتلي PDF / Word / Excel / صورة — هقراها وأخزنها\n\n"
         "/مسح — مسح الذاكرة")
 
 @bot.message_handler(commands=['مسح'])
@@ -221,6 +288,85 @@ def reset(message):
     memory[str(message.chat.id)] = []
     save_memory()
     bot.reply_to(message, "✅ مسحت الذاكرة — بداية جديدة!")
+
+# 📄 handler الملفات (PDF / Word / Excel)
+@bot.message_handler(content_types=['document'])
+def handle_document(message):
+    try:
+        bot.send_chat_action(message.chat.id, 'typing')
+        file_name = message.document.file_name or "file"
+        print(f"📥 ملف وصل: {file_name}")
+
+        file_info = bot.get_file(message.document.file_id)
+        file_bytes = bot.download_file(file_info.file_path)
+
+        text, count = extract_text_from_file(file_bytes, file_name)
+        if text is None:
+            bot.reply_to(message,
+                "⚠️ الصيغة دي مش مدعومة لسه.\n"
+                "المدعوم حالياً: PDF، Word (docx)، Excel (xlsx) — والصور 📁")
+            return
+
+        if not text.strip():
+            bot.reply_to(message,
+                "🤔 الملف وصل لكن النص طلع فاضي —\n"
+                "غالباً ده PDF ماسوح (Scanner). جرّب تصور صفحاته كصور وابعتها لي 📸")
+            return
+
+        caption = message.caption or ""
+
+        if caption:
+            # فيه سؤال مع الملف
+            question_with_text = f"بناء على ملف «{file_name}»، أجب على: {caption}\n\nنص الملف:\n{text[:20000]}"
+            reply = ask_gemini([], question_with_text)
+        else:
+            # ملخص تلقائي
+            summary = summarize_text(text)
+            reply = (f"✅ قريت «{file_name}» ({count} جزء) وخزنته في معرفتي.\n\n"
+                     f"📋 الملخص:\n{summary}\n\n"
+                     f"💡 اسألني أي وقت: «إيه أهم النقط في {file_name}؟»")
+
+        # 💾 تخزين المعرفة
+        knowledge[file_name] = {
+            "summary": summarize_text(text) if caption else summary,
+            "text": text[:25000],
+            "count": count
+        }
+        save_knowledge()
+
+        bot.reply_to(message, reply)
+
+    except Exception as e:
+        print("🔴 خطأ في الملف:", e)
+        bot.reply_to(message, "⚠️ حصل خطأ في قراءة الملف")
+
+# 🖼️ handler الصور
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    try:
+        bot.send_chat_action(message.chat.id, 'typing')
+        file_id = message.photo[-1].file_id  # أعلى دقة
+        file_info = bot.get_file(file_id)
+        img_bytes = bot.download_file(file_info.file_path)
+
+        question = message.caption or "وصف الصورة دي بإيجاز، ولو فيها نص اقراه."
+        img_b64 = base64.b64encode(img_bytes).decode()
+
+        body = {
+            "contents": [{
+                "parts": [
+                    {"text": question},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
+                ]
+            }]
+        }
+        result = gemini_request(body)
+        reply = result["candidates"][0]["content"]["parts"][0]["text"]
+
+        bot.reply_to(message, reply)
+    except Exception as e:
+        print("🔴 خطأ في الصورة:", e)
+        bot.reply_to(message, "⚠️ حصل خطأ في تحليل الصورة")
 
 @bot.message_handler(func=lambda m: m.content_type == 'text')
 def chat(message):
@@ -255,5 +401,5 @@ def handle_voice(message):
 
 # 🚀 الإقلاع
 restore_reminders()
-print("🤖 المساعد شغال (نص + صوت + تذكيرات ⏰)!")
+print("🤖 المساعد شغال (نص + صوت + تذكيرات + ملفات 📁)!")
 bot.infinity_polling()
