@@ -8,6 +8,7 @@ from memory_store import memory, save, state, knowledge
 import tools_reminders
 import tools_tasks
 import tools_files
+import tools_email
 import tools_search
 import tools_audio
 import skills
@@ -18,6 +19,7 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 tools_reminders.bot = bot
 tools_tasks.bot = bot
 tools_files.bot = bot
+tools_email.bot = bot
 
 def ask_gemini(history, user_message, personality):
     contents = []
@@ -56,6 +58,10 @@ def process_message(user_id, user_text):
     # 5️⃣ ملخص Word للمحادثة
     if tools_files.is_word_request(user_text):
         return tools_files.make_conversation_word(user_id, user_id)
+        
+    # 5️⃣ الإيميل 📧
+    r = tools_email.handle_email_text(user_id, user_text)
+    if r: return r    
 
     # 6️⃣ لينك → تلخيص
     if tools_search.is_link(user_text):
