@@ -13,6 +13,7 @@ import tools_calendar
 import tools_search
 import tools_audio
 import skills
+import tools_memory
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -41,47 +42,48 @@ def process_message(user_id, user_text):
         state["owner_chat_id"] = user_id
         save("state", state)
 
-    # 1️⃣ القوائم
+    # 1 القوائم
     r = tools_files.handle_files_text(user_id, user_text)
     if r: return r
 
-    # 2️⃣ التذكيرات (أولوية — عشان "فكرني...")
+    # 2 التذكيرات (أولوية — عشان "فكرني...")
     r = tools_reminders.handle_reminders_text(user_id, user_text)
     if r: return r
 
-    # 3️⃣ المهام
+    # 3 المهام
     r = tools_tasks.handle_tasks_text(user_id, user_text)
     if r: return r
 
-    # 4️⃣ الأوضاع 🎭
+    # 4 الأوضاع 🎭
     r = skills.handle_mode_text(user_text)
     if r: return r
 
-    # 5️⃣ ملخص Word للمحادثة
+    # 5 ملخص Word للمحادثة
     if tools_files.is_word_request(user_text):
         return tools_files.make_conversation_word(user_id, user_id)
         
-    # 5️⃣ الإيميل 📧
+    # 6 الإيميل 📧
     r = tools_email.handle_email_text(user_id, user_text)
     if r: return r  
 
-    # 6️⃣ التقويم 📅
+    # 7 التقويم 📅
     r = tools_calendar.handle_calendar_text(user_id, user_text)
     if r: return r
 
-    # 6️⃣ لينك → تلخيص
+    # 8 لينك → تلخيص
     if tools_search.is_link(user_text):
         return tools_search.summarize_link(user_text)
 
-    # 7️⃣ بحث في الإنترنت
+    # 9 بحث في الإنترنت
     if tools_search.needs_search(user_text):
         return tools_search.search_and_answer(user_text)
+        
+    # 10 إدارة الذاكرة 🧠
+    r = tools_memory.handle_memory_text(user_id, user_text)
+    if r: return r
 
-    # 8️⃣ محادثة عادية (بالوضع الحالي + سياق الملفات)
-    if user_id not in memory:
-        memory[user_id] = []
-    history = memory[user_id][-30:]
-
+    
+    # 11 محادثة عادية (بالوضع + الملفات + الذاكرة الذكية 🧠)
     message_with_context = user_text
     for name, info in knowledge.items():
         if name in user_text:
@@ -90,12 +92,25 @@ def process_message(user_id, user_text):
             break
 
     personality = skills.get_current_personality()
-    reply = ask_gemini(history, message_with_context, personality)
+
+    # 🧠 بناء السياق بالذاكرة الذكية
+    contents = tools_memory.build_context_messages(user_id, message_with_context)
+    body = {
+        "system_instruction": {"parts": [{"text": personality}]},
+        "contents": contents
+    }
+    result = gemini_request(body)
+    reply = result["candidates"][0]["content"]["parts"][0]["text"]
 
     memory[user_id].append({"role": "user", "content": user_text})
     memory[user_id].append({"role": "model", "content": reply})
     save("memory", memory)
+
+    # 🧠 استخراج الحقائق + ضغط القديم
+    tools_memory.maybe_extract_and_compress(user_id)
+
     return reply
+    
 
 # ====== الـ Handlers ======
 
