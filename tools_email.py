@@ -139,3 +139,10 @@ def read_inbox_summary():
     except Exception as e:
         print("🔴 خطأ في القراءة:", e)
         return "⚠️ فشلت قراءة الإيميلات — اتأكد من App Password في start.sh"
+
+ # تشخيص عند الإقلاع
+if EMAIL_ADDRESS and EMAIL_APP_PASSWORD:
+    print(f"📧 الإيميل متظبط: {EMAIL_ADDRESS}")
+else:
+    print("⚠️⚠️ الإيميل مش متظبط! راجع start.sh:")
+    print("   export EMAIL_ADDRESS=... و export EMAIL_APP_PASSWORD=...")       
