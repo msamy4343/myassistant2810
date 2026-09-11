@@ -9,6 +9,7 @@ import tools_reminders
 import tools_tasks
 import tools_files
 import tools_email
+import tools_calendar
 import tools_search
 import tools_audio
 import skills
@@ -20,6 +21,7 @@ tools_reminders.bot = bot
 tools_tasks.bot = bot
 tools_files.bot = bot
 tools_email.bot = bot
+tools_calendar.bot = bot
 
 def ask_gemini(history, user_message, personality):
     contents = []
@@ -61,7 +63,11 @@ def process_message(user_id, user_text):
         
     # 5️⃣ الإيميل 📧
     r = tools_email.handle_email_text(user_id, user_text)
-    if r: return r    
+    if r: return r  
+
+    # 6️⃣ التقويم 📅
+    r = tools_calendar.handle_calendar_text(user_id, user_text)
+    if r: return r
 
     # 6️⃣ لينك → تلخيص
     if tools_search.is_link(user_text):
