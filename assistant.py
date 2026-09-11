@@ -71,4 +71,121 @@ def process_message(user_id, user_text):
     r = tools_memory.handle_memory_text(user_id, user_text)
     if r: return r
 
-    # 1️⃣1️⃣ محادثة عادية (بالوض
+    # 1️⃣1️⃣ محادثة عادية (بالوضع + الملفات + الذاكرة الذكية 🧠)
+    message_with_context = user_text
+    for name, info in knowledge.items():
+        if name in user_text:
+            context = f"\n\n[معرفتك من ملف «{name}»:\nالملخص: {info['summary']}\nجزء من النص:\n{info.get('text', '')[:8000]}]"
+            message_with_context += context
+            break
+
+    personality = skills.get_current_personality()
+
+    # 🧠 بناء السياق بالذاكرة الذكية
+    contents = tools_memory.build_context_messages(user_id, message_with_context)
+    body = {
+        "system_instruction": {"parts": [{"text": personality}]},
+        "contents": contents
+    }
+    result = gemini_request(body)
+    reply = result["candidates"][0]["content"]["parts"][0]["text"]
+
+    memory[user_id].append({"role": "user", "content": user_text})
+    memory[user_id].append({"role": "model", "content": reply})
+    save("memory", memory)
+
+    # 🧠 استخراج الحقائق + ضغط القديم
+    tools_memory.maybe_extract_and_compress(user_id)
+
+    return reply
+
+
+# ====== الـ Handlers ======
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.reply_to(message,
+        "أهلاً يا مصطفى! 👋 أنا مساعدك الشامل:\n\n"
+        "💬 اكتبلي أي حاجة (وبفتكر كل حاجة عنك 🧠)\n"
+        "🎤 ابعتلي فويس — هرد عليك فويس!\n"
+        "⏰ فكرني... / فكرني كل يوم...\n"
+        "📋 ضيف مهمة... / مهامي؟\n"
+        "📁 ابعتلي ملف أو صورة\n"
+        "🔍 دور على... / ابعتلي لينك\n"
+        "📧 ابعت ايميل... / قريتلي ايميلاتي\n"
+        "📅 حط ميعاد... / مواعيدي؟\n"
+        "🎭 حط وضع: مدرس / سكرتير / صديق / مدرب\n"
+        "📄 اعمللي ملخص word\n\n"
+        "🧠 قول: «إيه اللي بتفتكره عني؟»\n\n"
+        "/مسح — مسح كل الذاكرات")
+
+
+@bot.message_handler(commands=['مسح'])
+def reset(message):
+    user_id = str(message.chat.id)
+    # مسح كل طبقات الذاكرة كاملة
+    memory[user_id] = []
+    save("memory", memory)
+    tools_memory.facts.clear()
+    tools_memory.summaries.clear()
+    tools_memory.save_json(tools_memory.FACTS_FILE, tools_memory.facts)
+    tools_memory.save_json(tools_memory.SUMMARIES_FILE, tools_memory.summaries)
+    bot.reply_to(message,
+        "✅ مسحت كل الذاكرات كاملة:\n"
+        "• المحادثة 💬\n"
+        "• الحقايق عنك 🧠\n"
+        "• ملخصات المحادثات القديمة 📖\n\n"
+        "بداية جديدة خالص!")
+
+
+@bot.message_handler(content_types=['document'])
+def on_document(message):
+    tools_files.handle_document(message)
+
+
+@bot.message_handler(content_types=['photo'])
+def on_photo(message):
+    tools_files.handle_photo(message)
+
+
+@bot.message_handler(func=lambda m: m.content_type == 'text' and not m.text.startswith('/'))
+def chat(message):
+    user_id = str(message.chat.id)
+    try:
+        bot.send_chat_action(message.chat.id, 'typing')
+        reply = process_message(user_id, message.text)
+        if reply:
+            bot.reply_to(message, reply)
+    except Exception as e:
+        print("خطأ:", e)
+        bot.reply_to(message, "⚠️ حصل خطأ، جرب تاني")
+
+
+@bot.message_handler(content_types=['voice'])
+def handle_voice(message):
+    user_id = str(message.chat.id)
+    try:
+        bot.send_chat_action(message.chat.id, 'typing')
+        file_info = bot.get_file(message.voice.file_id)
+        ogg_bytes = bot.download_file(file_info.file_path)
+
+        user_text = tools_audio.voice_to_text(ogg_bytes)
+        print("🎤 قلت:", user_text)
+
+        reply = process_message(user_id, user_text)
+
+        if reply:
+            bot.send_chat_action(message.chat.id, 'record_voice')
+            tools_audio.send_audio_reply(bot, message.chat.id, reply)
+    except Exception as e:
+        print("خطأ في الصوت:", e)
+        bot.reply_to(message, "⚠️ حصل خطأ، ابعتها تاني")
+
+
+# 🚀 الإقلاع
+tools_reminders.restore_reminders()
+tools_tasks.schedule_next_brief()
+print("🤖 المساعد الشامل النهائي شغال! 🎉")
+print("   (نص + صوت فويس + تذكيرات + مهام + ملفات + بحث")
+print("    + إيميل + تقويم + أوضاع + ذاكرة ذكية 🧠)")
+bot.infinity_polling()
