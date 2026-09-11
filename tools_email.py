@@ -13,34 +13,47 @@ EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "")
 
 bot = None  # يتحدد من assistant.py
 
+
+# ====== فهم مرن لأي صيغة كتابة ======
+
+def wants_read_emails(user_text):
+    t = user_text
+    t_low = t.lower()
+    reading_words = ["قريتلي", "قري", "ملخص", "آخر", "اخر", "الأخيرة", "الاخيرة", "الأخير", "الاخير", "الجديد"]
+    email_words = ["ايميل", "إيميل", "ايمل", "يميل", "ميلات", "email", "inbox", "بريد", "الايميل", "الإيميل"]
+    has_read = any(w in t for w in reading_words)
+    has_email = any(w in t_low for w in email_words)
+    return has_read and has_email
+
+
 def wants_send_email(user_text):
     t = user_text.lower()
     send_words = ["ابعت", "بعت", "ابعث", "ابعتل", "ابعتلي", "بعته", "send"]
     email_words = ["ايميل", "إيميل", "ايمل", "email", "mail", "ميل"]
-    
     return any(w in t for w in send_words) and any(w in t for w in email_words)
+
+
 def handle_email_text(user_id, user_text):
     if not EMAIL_ADDRESS or not EMAIL_APP_PASSWORD:
-        return None  # الإيميل متظبطش — نتجاهل
+        return None  # الإيميل متظبطش
 
-    # 📬 قراءة الإيميلات
-    if any(k in user_text for k in EMAIL_READ_KEYWORDS):
-        if "قريتلي" in user_text or "قري" in user_text:
-            return read_inbox_summary()
-        return "قول: «قريتلي ايميلاتي» وهفتحلك البريد 📬"
+    # 📬 قراءة الإيميلات (أي صيغة كتابة)
+    if wants_read_emails(user_text):
+        return read_inbox_summary()
 
-    # ✉️ إرسال إيميل
-    if any(k in user_text for k in EMAIL_SEND_KEYWORDS):
+    # ✉️ إرسال إيميل (أي صيغة كتابة)
+    if wants_send_email(user_text):
         return process_send_request(user_text)
 
     return None
+
 
 def parse_email_request(text):
     """جيميناي يستخرج تفاصيل الإيميل من كلام المستخدم"""
     prompt = f"""المستخدم عايز يبعت إيميل. رسالته: "{text}"
 
 استخرج ورجّع JSON فقط (بدون markdown):
-{{"to": "إيميل المستلم كما ذكره المستلم", "subject": "موضوع مناسب", "body": "نص الإيميل كامل جاهز للإرسال، مكتوب باحترافية بالعربي"}}
+{{"to": "إيميل المستلم كما ذكره", "subject": "موضوع مناسب", "body": "نص الإيميل كامل جاهز للإرسال، مكتوب باحترافية بالعربي"}}
 لو مفيش إيميل واضح في الرسالة، خلي "to" فاضي."""
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
     result = gemini_request(body)
@@ -51,6 +64,7 @@ def parse_email_request(text):
     except:
         return None
 
+
 def send_email(to, subject, body_text):
     msg = MIMEText(body_text, "plain", "utf-8")
     msg["Subject"] = subject
@@ -60,6 +74,7 @@ def send_email(to, subject, body_text):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(EMAIL_ADDRESS, EMAIL_APP_PASSWORD)
         server.send_message(msg)
+
 
 def process_send_request(user_text):
     data = parse_email_request(user_text)
@@ -75,13 +90,14 @@ def process_send_request(user_text):
 
     try:
         send_email(to, subject, body_text)
-        return (f"✅ **بعت الإيميل بنجاح!**\n\n"
+        return (f"✅ بعت الإيميل بنجاح!\n\n"
                 f"📨 إلى: {to}\n"
                 f"📌 الموضوع: {subject}\n"
                 f"📝 نص الإيميل:\n{body_text}")
     except Exception as e:
         print("🔴 خطأ في الإرسال:", e)
         return "⚠️ فشل الإرسال — اتأكد من App Password في start.sh وجرب تاني"
+
 
 def read_inbox_summary():
     try:
@@ -143,9 +159,9 @@ def read_inbox_summary():
         print("🔴 خطأ في القراءة:", e)
         return "⚠️ فشلت قراءة الإيميلات — اتأكد من App Password في start.sh"
 
- # تشخيص عند الإقلاع
+
+# تشخيص عند الإقلاع
 if EMAIL_ADDRESS and EMAIL_APP_PASSWORD:
     print(f"📧 الإيميل متظبط: {EMAIL_ADDRESS}")
 else:
-    print("⚠️⚠️ الإيميل مش متظبط! راجع start.sh:")
-    print("   export EMAIL_ADDRESS=... و export EMAIL_APP_PASSWORD=...")       
+    print("⚠️⚠️ الإيميل مش متظبط! راجع start.sh")
