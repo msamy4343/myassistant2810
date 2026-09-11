@@ -13,9 +13,12 @@ EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "")
 
 bot = None  # يتحدد من assistant.py
 
-EMAIL_SEND_KEYWORDS = ["ابعت ايميل", "ابعت إيميل", "ابعتل ايميل", "send email"]
-EMAIL_READ_KEYWORDS = ["قريتلي ايميلاتي", "إيميلاتي", "ايميلاتي", "قري ايميلاتي", "قريت الايميلات", "قريت الإيميلات"]
-
+def wants_send_email(user_text):
+    t = user_text.lower()
+    send_words = ["ابعت", "بعت", "ابعث", "ابعتل", "ابعتلي", "بعته", "send"]
+    email_words = ["ايميل", "إيميل", "ايمل", "email", "mail", "ميل"]
+    
+    return any(w in t for w in send_words) and any(w in t for w in email_words)
 def handle_email_text(user_id, user_text):
     if not EMAIL_ADDRESS or not EMAIL_APP_PASSWORD:
         return None  # الإيميل متظبطش — نتجاهل
